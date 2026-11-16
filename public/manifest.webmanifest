@@ -1,0 +1,13 @@
+{
+  "name": "JIMULATOR Golf Simulator League",
+  "short_name": "JIMULATOR",
+  "description": "5 Event Championship. Five events. One champion.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000a24",
+  "theme_color": "#0b1210",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
