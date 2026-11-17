@@ -41,7 +41,7 @@ function SignIn() {
         <label>Email<input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
         <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
         <button className="btn btn-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-        {demo && <p className="fine">Demo login: {DEMO_COMMISSIONER.email} / {DEMO_COMMISSIONER.password}</p>}
+        <p className="fine">Only the league commissioner signs in. Players don't need an account.{demo && ` Demo login: ${DEMO_COMMISSIONER.email} / ${DEMO_COMMISSIONER.password}`}</p>
       </form>
     </div>
   );

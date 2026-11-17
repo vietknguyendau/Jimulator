@@ -6,6 +6,8 @@ The league site for the JIMULATOR 5 Event Championship: public schedule, event p
 
 Without Supabase keys the app runs as a **demo league** in the browser, so you can deploy to Vercel and click around before setting up the database. Demo commissioner login: `commissioner@jimulator.demo` / `jimulator`.
 
+**Only the commissioner has an account.** Players just open the link; nothing to sign up for. The commissioner signs in with email and password, and the database only lets that one account make changes.
+
 ---
 
 ## How the league works in the app
@@ -53,22 +55,26 @@ Without Supabase keys the app runs as a **demo league** in the browser, so you c
    select app_private.create_season_core(2026);   -- creates Events 1–5
    ```
    then add players in the app.
-4. **Authentication → Users → Add user:** create the commissioner account with an email and password (tick "Auto Confirm User"). Then in the SQL Editor:
-   ```sql
-   insert into commissioners (user_id)
-   select id from auth.users where email = 'YOUR-EMAIL@example.com';
-   ```
-5. **Authentication → Sign In / Providers:** you can turn off "Allow new users to sign up". Nobody else needs an account; the public pages don't require login.
-6. **Project Settings → API:** copy the **Project URL** and the **anon public** key.
+4. **Register the commissioner** (Jim):
+   1. **Authentication → Users → Add user → Create new user.** Enter Jim's email and a password, tick **Auto Confirm User**, and click **Create user**.
+   2. In a new SQL query, with Jim's email filled in:
+      ```sql
+      insert into commissioners (user_id)
+      select id from auth.users where email = 'jim@example.com';
+      ```
+      It should report 1 row. That's what makes the account the commissioner; any other account can sign in but can't change anything.
+   3. To add a backup commissioner later, repeat both steps with their email.
+5. **Authentication → Sign In / Providers:** turn off **Allow new users to sign up**. Nobody registers through the site; you add the commissioner here.
+6. Copy the **Project URL** (the **Connect** button, or **Project Settings → Data API**) and the **publishable** key (`sb_publishable_…`, called **anon public** on older projects) from **Project Settings → API Keys**. Never use the secret / service_role key.
 
 > Using the Supabase CLI instead? `supabase link` then `supabase db push`, and `supabase db reset` locally runs `seed.sql` automatically.
 
 ### 3. Vercel
 1. **Add New → Project →** import the GitHub repo. Framework preset: Vite (auto-detected).
-2. **Environment Variables:** add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from step 2.6.
+2. **Environment Variables:** add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from step 2.6. Choose type **Config**, not Secret: `VITE_` values are built into the public site, and both of these are meant to be public.
 3. Deploy. Every push to `main` redeploys.
 
-Sign in at **Commissioner** in the top menu. Sessions persist on the device, so Day 1 scores are waiting when you come back on Day 2.
+Tap **Commissioner** in the top menu and sign in. The device stays signed in until you tap **Sign out**. Scores live in the database either way, so Day 1 scores are waiting on Day 2. Forgot the password? In Supabase, **Authentication → Users → ⋯ → Send password recovery**, or delete the user and add them again (then rerun the `insert into commissioners` line).
 
 ---
 
@@ -89,7 +95,7 @@ Sign in at **Commissioner** in the top menu. Sessions persist on the device, so 
 ```bash
 npm install
 npm run dev        # demo league at http://localhost:5173 (no Supabase needed)
-npm test           # 37 tests: rules engine, the five acceptance checks, and the SQL migrations run in PGlite (Postgres in WASM)
+npm test           # 38 tests: rules engine, the five acceptance checks, and the SQL migrations run in PGlite (Postgres in WASM)
 npm run build      # type-check + production build
 npx tsx scripts/generate-seed.ts   # regenerate supabase/seed.sql from src/data/demoSeed.ts
 ```
@@ -99,7 +105,7 @@ The acceptance checks live in `tests/acceptance.test.ts` (through the app's data
 1. Monday 4 + Tuesday 4 → one result on the 8-player table.
 2. No 5th assignment to either session; no player in both sessions.
 3. Cross-day tie for 1st → 14.5 each; next player finishes 3rd.
-4. Day 1 scores survive sign-out and return on sign-in; public sees "Day 2 pending" with no scores until published.
+4. Day 1 scores survive the commissioner signing out and return on sign-in; public sees "Day 2 pending" with no scores until published.
 5. Four-player single-day event → 12, 9, 6, 3.
 
 ## Logo and app icon

@@ -6,7 +6,7 @@ import { formatSessionDate, formatStartTime } from './lib/time';
 import type { EventSession, LeagueEvent, Snapshot } from './lib/types';
 
 export function Layout({ route, children }: { route: string[]; children: ReactNode }) {
-  const { snap, commissioner, repo } = useApp();
+  const { snap, repo } = useApp();
   const here = route[0] ?? '';
   const link = (to: string, label: string) => (
     <a href={`#/${to}`} className={here === to ? 'active' : ''} aria-current={here === to ? 'page' : undefined}>
@@ -24,7 +24,7 @@ export function Layout({ route, children }: { route: string[]; children: ReactNo
           {link('', 'Home')}
           {link('schedule', 'Schedule')}
           {link('rules', 'Rules')}
-          {link('admin', commissioner ? 'Commissioner' : 'Sign in')}
+          {link('admin', 'Commissioner')}
         </nav>
       </header>
       {repo.mode === 'demo' && (

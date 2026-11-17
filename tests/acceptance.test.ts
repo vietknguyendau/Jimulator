@@ -120,6 +120,7 @@ describe('acceptance checks', () => {
     await expect(reopened.saveScore([...mine][0], flat(40), 'completed')).rejects.toThrow(/Only the commissioner/);
 
     // Commissioner signs back in on Day 2: Day 1 scores are there, and entry resumes.
+    await expect(reopened.signIn(DEMO_COMMISSIONER.email, 'nope')).rejects.toThrow(/Wrong email or password/);
     await reopened.signIn(DEMO_COMMISSIONER.email, DEMO_COMMISSIONER.password);
     const back = await reopened.load();
     const day1 = back.scores.filter((s) => mine.has(s.assignment_id) && s.status === 'completed');

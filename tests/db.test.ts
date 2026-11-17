@@ -25,6 +25,7 @@ grant execute on function auth.uid() to anon, authenticated;
 
 let db: PGlite;
 
+/** Supabase runs signed-in users as `authenticated` with their user id in the JWT; everyone else is `anon`. */
 async function as(who: 'commissioner' | 'public' | 'stranger', sql: string, params: unknown[] = []) {
   const role = who === 'public' ? 'anon' : 'authenticated';
   const sub = who === 'commissioner' ? COMMISH : who === 'stranger' ? STRANGER : '';
@@ -121,6 +122,15 @@ describe('privacy (acceptance 4)', () => {
     expect(r.rows[0].name).toBe('Holiday Classic');
     expect(await fails(as('stranger', `select publish_event($1)`, [demoIds.eid(2)]))).toMatch(/Only the commissioner/);
     expect(await fails(as('public', `select app_private.publish_event_core($1)`, [demoIds.eid(2)]))).toMatch(/permission denied/);
+  });
+});
+
+describe('commissioner login', () => {
+  it('lets only the account listed in commissioners act as commissioner', async () => {
+    expect((await as('commissioner', `select is_commissioner() c`)).rows[0].c).toBe(true);
+    expect((await as('stranger', `select is_commissioner() c`)).rows[0].c).toBe(false);
+    expect((await as('public', `select is_commissioner() c`)).rows[0].c).toBe(false);
+    expect(await fails(as('stranger', `insert into commissioners values ('${STRANGER}')`))).toMatch(/row-level security/);
   });
 });
 
