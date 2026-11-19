@@ -1,7 +1,7 @@
 // Demo/offline store: same rules as the Supabase database, kept in browser storage.
 // Used when no Supabase project is configured, and by the tests.
-import { ratingComplete, scrambleTeamStrokes, strokesReceived } from '../lib/handicap';
-import { buildLeaderboard, buildTeamLeaderboard } from '../lib/leaderboard';
+import { computeOutcome, isTeamCard, lockedCourseHandicap, planEntries } from '../lib/formats';
+import { strokesReceived, type NineHoleRating } from '../lib/handicap';
 import { checkAssignment, checkSessionDate, checkStartTime, checkTeam, checkTeamAssignment, lockProblems, MAX_PER_SESSION, MAX_PLAYERS, RuleError, teamName } from '../lib/schedule';
 import type { EventResult, ResultStatus, Snapshot } from '../lib/types';
 import { checkScoreEntry, type EventSetupPatch, type PlayerInput, type Repo, type TeamInput } from './repo';
@@ -48,13 +48,8 @@ export class LocalRepo implements Repo {
     if (raw) {
       try {
         const s = JSON.parse(raw) as Snapshot;
-        // Demo data saved before scramble support: fill in the new fields.
-        s.teams ??= [];
-        s.eventTeams ??= [];
-        s.teamScores ??= [];
-        for (const e of s.events) e.format ??= 'individual';
-        for (const r of s.results) r.team_id ??= null;
-        return s;
+        // Demo data saved by an older version: start the demo over.
+        if (s.entries) return s;
       } catch {
         /* fall through to reseed */
       }
@@ -87,7 +82,8 @@ export class LocalRepo implements Repo {
       const published = new Set(s.events.filter((e) => e.status === 'published').map((e) => e.id));
       const visible = new Set(s.assignments.filter((a) => published.has(a.event_id)).map((a) => a.id));
       s.scores = s.scores.filter((r) => visible.has(r.assignment_id));
-      s.teamScores = s.teamScores.filter((r) => published.has(r.event_id));
+      const visibleEntries = new Set(s.entries.filter((x) => published.has(x.event_id)).map((x) => x.id));
+      s.entryScores = s.entryScores.filter((r) => visibleEntries.has(r.entry_id));
     }
     return s;
   }
@@ -137,7 +133,7 @@ export class LocalRepo implements Repo {
 
   async deleteTeam(teamId: string) {
     this.mutate((s) => {
-      if (s.eventTeams.some((x) => x.team_id === teamId) || s.results.some((r) => r.team_id === teamId)) {
+      if (s.entries.some((x) => x.team_id === teamId) || s.results.some((r) => r.team_id === teamId)) {
         throw new RuleError("This team has played or is locked into an event, so it can't be removed. Rename it or change players instead.");
       }
       s.teams = s.teams.filter((x) => x.id !== teamId);
@@ -153,25 +149,34 @@ export class LocalRepo implements Repo {
       for (const pid of [team.player_a, team.player_b]) {
         s.assignments.push({
           id: uid(), event_id: eventId, session_id: sessionId, player_id: pid,
-          index_used: null, course_handicap: null, strokes: null, handicap_confirmed_at: null,
+          index_used: null, course_handicap: null, strokes: null, handicap_confirmed_at: null, match_slot: null,
         });
       }
     });
   }
 
-  async saveTeamScore(eventId: string, teamId: string, holes: (number | null)[], status: ResultStatus) {
+  async setMatchSlot(assignmentId: string, slot: 1 | 2 | null) {
     this.mutate((s) => {
-      const et = s.eventTeams.find((x) => x.event_id === eventId && x.team_id === teamId);
-      if (!et) throw new Error('That team is not in this event.');
-      const ev = s.events.find((e) => e.id === eventId)!;
-      const sess = s.sessions.find((x) => x.id === et.session_id)!;
+      const a = s.assignments.find((x) => x.id === assignmentId);
+      if (!a) throw new Error('Assignment not found.');
+      this.draftEvent(s, a.event_id);
+      a.match_slot = slot;
+    });
+  }
+
+  async saveEntryScore(entryId: string, holes: (number | null)[], status: ResultStatus) {
+    this.mutate((s) => {
+      const en = s.entries.find((x) => x.id === entryId);
+      if (!en) throw new Error('That team is not in this event.');
+      const ev = s.events.find((e) => e.id === en.event_id)!;
+      const sess = s.sessions.find((x) => x.id === en.session_id)!;
       if (ev.status === 'draft') throw new RuleError('Lock the event and confirm handicaps before entering scores.');
       if (ev.status === 'published') throw new RuleError('Results are published. Unpublish the event to correct a score.');
       if (sess.status === 'resolved') throw new RuleError(`Day ${sess.session_number} is marked complete. Reopen it to change a score.`);
       checkScoreEntry(holes, status, 'team');
-      const row = s.teamScores.find((r) => r.event_id === eventId && r.team_id === teamId);
+      const row = s.entryScores.find((r) => r.entry_id === entryId);
       if (row) Object.assign(row, { hole_scores: holes, status, updated_at: now() });
-      else s.teamScores.push({ event_id: eventId, team_id: teamId, hole_scores: holes, status, updated_at: now() });
+      else s.entryScores.push({ entry_id: entryId, hole_scores: holes, status, updated_at: now() });
     });
   }
 
@@ -179,7 +184,9 @@ export class LocalRepo implements Repo {
     this.mutate((s) => {
       const ev = s.events.find((e) => e.id === eventId);
       if (!ev) throw new Error('Event not found.');
-      const setupKeys: (keyof EventSetupPatch)[] = ['format', 'course_name', 'tees', 'par9', 'course_rating9', 'slope9', 'sim_settings'];
+      const setupKeys: (keyof EventSetupPatch)[] = [
+        'format', 'team_size', 'counting_scores', 'match_type', 'hole_si', 'course_name', 'tees', 'par9', 'course_rating9', 'slope9', 'sim_settings',
+      ];
       if (ev.status !== 'draft' && setupKeys.some((k) => k in patch && JSON.stringify(patch[k]) !== JSON.stringify(ev[k]))) {
         throw new RuleError("This event's setup is locked. Unlock it before changing the format, course, tees or simulator settings.");
       }
@@ -232,7 +239,7 @@ export class LocalRepo implements Repo {
       checkAssignment(s.sessions, s.assignments, eventId, sessionId, playerId);
       s.assignments.push({
         id: uid(), event_id: eventId, session_id: sessionId, player_id: playerId,
-        index_used: null, course_handicap: null, strokes: null, handicap_confirmed_at: null,
+        index_used: null, course_handicap: null, strokes: null, handicap_confirmed_at: null, match_slot: null,
       });
     });
   }
@@ -268,30 +275,24 @@ export class LocalRepo implements Repo {
       if (ev.status !== 'draft') throw new RuleError('This event is already locked.');
       const problems = lockProblems(ev, s.sessions, s.assignments, s.players, s.teams);
       if (problems.length) throw new RuleError(problems[0]);
-      if (!ratingComplete(ev)) throw new RuleError('Enter the 9-hole rating.');
       const t = now();
       for (const a of s.assignments.filter((x) => x.event_id === eventId)) {
         const p = s.players.find((x) => x.id === a.player_id)!;
-        const h = strokesReceived(p.handicap_index!, ev);
         a.index_used = p.handicap_index;
-        a.course_handicap = Math.round(h.courseHandicap * 10000) / 10000;
-        a.strokes = h.strokes;
+        a.course_handicap = lockedCourseHandicap(p.handicap_index!, ev);
+        a.strokes = strokesReceived(p.handicap_index!, ev as NineHoleRating).strokes;
         a.handicap_confirmed_at = t;
-        if (ev.format === 'individual' && !s.scores.some((r) => r.assignment_id === a.id)) {
+        if (!isTeamCard(ev) && !s.scores.some((r) => r.assignment_id === a.id)) {
           s.scores.push({ assignment_id: a.id, hole_scores: Array(9).fill(null), status: 'pending', updated_at: t });
         }
       }
-      if (ev.format === 'scramble') {
-        const mine = s.assignments.filter((x) => x.event_id === eventId);
-        for (const team of s.teams.filter((x) => x.season_year === ev.season_year)) {
-          const a = mine.find((x) => x.player_id === team.player_a);
-          const b = mine.find((x) => x.player_id === team.player_b);
-          if (!a || !b) continue;
-          s.eventTeams.push({
-            event_id: eventId, team_id: team.id, session_id: a.session_id, player_a: team.player_a, player_b: team.player_b,
-            ch_a: a.course_handicap!, ch_b: b.course_handicap!, strokes: scrambleTeamStrokes(a.course_handicap!, b.course_handicap!), confirmed_at: t,
-          });
-          s.teamScores.push({ event_id: eventId, team_id: team.id, hole_scores: Array(9).fill(null), status: 'pending', updated_at: t });
+      if (ev.format !== 'individual') {
+        const chOf = (pid: string) => s.assignments.find((x) => x.event_id === eventId && x.player_id === pid)?.course_handicap ?? null;
+        for (const pe of planEntries(ev, s, chOf)) {
+          const id = uid();
+          s.entries.push({ id, event_id: eventId, session_id: pe.session_id, team_id: pe.team_id, match_slot: pe.match_slot, strokes: pe.strokes, confirmed_at: t });
+          for (const m of pe.members) s.entryMembers.push({ entry_id: id, ...m });
+          if (isTeamCard(ev)) s.entryScores.push({ entry_id: id, hole_scores: Array(9).fill(null), status: 'pending', updated_at: t });
         }
       }
       ev.status = 'locked';
@@ -304,13 +305,15 @@ export class LocalRepo implements Repo {
       const ev = s.events.find((e) => e.id === eventId)!;
       if (ev.status !== 'locked') throw new RuleError('Only a locked event can be unlocked.');
       const ids = new Set(s.assignments.filter((a) => a.event_id === eventId).map((a) => a.id));
-      const mine = [...s.scores.filter((r) => ids.has(r.assignment_id)), ...s.teamScores.filter((r) => r.event_id === eventId)];
+      const entryIds = new Set(s.entries.filter((x) => x.event_id === eventId).map((x) => x.id));
+      const mine = [...s.scores.filter((r) => ids.has(r.assignment_id)), ...s.entryScores.filter((r) => entryIds.has(r.entry_id))];
       if (mine.some((r) => r.status !== 'pending' || r.hole_scores.some((h) => h != null))) {
         throw new RuleError('Scores have been entered, so the setup and handicaps stay locked.');
       }
       s.scores = s.scores.filter((r) => !ids.has(r.assignment_id));
-      s.teamScores = s.teamScores.filter((r) => r.event_id !== eventId);
-      s.eventTeams = s.eventTeams.filter((r) => r.event_id !== eventId);
+      s.entryScores = s.entryScores.filter((r) => !entryIds.has(r.entry_id));
+      s.entryMembers = s.entryMembers.filter((r) => !entryIds.has(r.entry_id));
+      s.entries = s.entries.filter((r) => !entryIds.has(r.id));
       for (const a of s.assignments.filter((x) => x.event_id === eventId)) {
         a.index_used = a.course_handicap = a.strokes = null;
         a.handicap_confirmed_at = null;
@@ -345,11 +348,14 @@ export class LocalRepo implements Repo {
       const sess = s.sessions.find((x) => x.id === sessionId)!;
       const ev = s.events.find((e) => e.id === sess.event_id)!;
       if (ev.status !== 'locked') throw new RuleError('Lock the event before completing a day.');
-      if (ev.format === 'scramble') {
-        const waitingTeams = s.eventTeams
+      if (isTeamCard(ev)) {
+        const waitingTeams = s.entries
           .filter((x) => x.session_id === sessionId)
-          .filter((x) => (s.teamScores.find((r) => r.event_id === x.event_id && r.team_id === x.team_id)?.status ?? 'pending') === 'pending')
-          .map((x) => teamName(s.teams.find((t) => t.id === x.team_id)!));
+          .filter((x) => (s.entryScores.find((r) => r.entry_id === x.id)?.status ?? 'pending') === 'pending')
+          .map((x) => {
+            const t = s.teams.find((y) => y.id === x.team_id);
+            return t ? teamName(t) : `Day ${sess.session_number} team`;
+          });
         if (waitingTeams.length) {
           throw new RuleError(`Still waiting on: ${waitingTeams.join(', ')}. Mark each team completed, did not finish, or did not attend.`);
         }
@@ -386,43 +392,10 @@ export class LocalRepo implements Repo {
       if (s.sessions.some((x) => x.event_id === eventId && x.status !== 'resolved')) {
         throw new RuleError('Complete every scheduled day before publishing.');
       }
+      const out = computeOutcome(s, eventId);
+      if (out.blockers.length) throw new RuleError(out.blockers[0]);
       s.results = s.results.filter((r) => r.event_id !== eventId);
-      if (ev.format === 'scramble') {
-        const lb = buildTeamLeaderboard(teamEntriesFor(s, eventId), s.settings.field_size_basis);
-        if (!lb.allResolved) throw new RuleError('Every team must be marked completed, did not finish, or did not attend.');
-        if (!lb.lookup.ok) throw new RuleError(teamTableReason(lb.field));
-        for (const r of lb.rows) {
-          const et = s.eventTeams.find((x) => x.event_id === eventId && x.team_id === r.player_id)!;
-          for (const pid of [et.player_a, et.player_b]) {
-            s.results.push({
-              event_id: eventId, player_id: pid, team_id: et.team_id, session_number: r.session_number,
-              status: r.status as EventResult['status'], position: r.position, tied: r.tied,
-              gross: r.status === 'dna' ? null : r.gross, strokes: r.strokes, net: r.net, points: r.points,
-            });
-          }
-        }
-        ev.status = 'published';
-        ev.published_at = now();
-        return;
-      }
-      const lb = buildLeaderboard(entriesFor(s, eventId), s.settings.field_size_basis);
-      if (!lb.allResolved) throw new RuleError('Every player must be marked completed, did not finish, or did not attend.');
-      if (!lb.lookup.ok) throw new RuleError(lb.lookup.reason);
-      for (const r of lb.rows) {
-        s.results.push({
-          event_id: eventId,
-          player_id: r.player_id,
-          team_id: null,
-          session_number: r.session_number,
-          status: r.status as EventResult['status'],
-          position: r.position,
-          tied: r.tied,
-          gross: r.status === 'dna' ? null : r.gross,
-          strokes: r.strokes,
-          net: r.net,
-          points: r.points,
-        });
-      }
+      for (const r of out.results) s.results.push({ event_id: eventId, ...r });
       ev.status = 'published';
       ev.published_at = now();
     });
@@ -456,22 +429,3 @@ export function entriesFor(s: Snapshot, eventId: string) {
     });
 }
 
-/** Scramble leaderboard input: one entry per team. */
-export function teamEntriesFor(s: Snapshot, eventId: string) {
-  return s.eventTeams
-    .filter((x) => x.event_id === eventId)
-    .map((x) => {
-      const sc = s.teamScores.find((r) => r.event_id === eventId && r.team_id === x.team_id);
-      const sess = s.sessions.find((y) => y.id === x.session_id);
-      return {
-        team_id: x.team_id,
-        session_number: sess?.session_number ?? 1,
-        status: sc?.status ?? ('pending' as ResultStatus),
-        hole_scores: sc?.hole_scores ?? Array(9).fill(null),
-        strokes: x.strokes,
-      };
-    });
-}
-
-export const teamTableReason = (n: number) =>
-  `No approved points table for a ${n}-team scramble. The rules only define 4- and 8-entry tables, so the commissioner must resolve this before publishing.`;

@@ -26,13 +26,22 @@ Without Supabase keys the app runs as a **demo league** in the browser, so you c
 | Points table picked from the total field across both days, counting **starters or finishers** (commissioner setting) | `league_settings.field_size_basis` |
 | Field sizes other than 4 or 8 can't be published until the commissioner resolves them | `publish_event()` refuses with a clear message |
 | Season standings, tiebreakers (1sts → 2nds → 3rds → lowest cumulative net → playoff) | `src/lib/standings.ts` |
+| **Formats:** each event is Individual, Scramble (2 or 4), Alternate shot (2), Shamble (2 or 4), Best ball (2 or 4) or Match play (singles or 2 vs 2); format choices lock with the setup | `events.format` … `hole_si` |
+| 2-person formats use fixed season teams (2 players, one team per player, up to 4 teams); teammates play the same session | `teams`, lock checks |
+| 4-person formats: each day's group of four is a team | lock checks, `event_entries` |
+| Handicaps use WHS recommended allowances: scramble 35/15 (2) or 25/20/15/10 (4); alternate shot 50% combined; best ball / shamble 85% (2), 75/85/100% for best 1/2/3 of 4; match play 100% singles, 90% 2 vs 2, off the low player | `src/lib/formats.ts`, migration 6 |
+| Best ball, shamble and match play give strokes hole by hole, on the hardest holes by the course card's stroke index | `hole_strokes()`, `si_rank()` |
+| Team points: one combined leaderboard by net; each finishing team covers as many places as it has players, and every teammate gets the average of those places (8-player 2-person event: 14.5 / 10 / 6 / 2; 4-person: 12.25 / 4) | `publish_event()` |
+| Match play: win and halve points set by the commissioner (a loss earns 0); a side that doesn't finish loses by forfeit; held until the points are set | `league_settings.match_*_points` |
 
 ### Commissioner workflow (per event)
-1. **Setup:** course, tees, 9-hole par/rating/slope, simulator settings.
+Before the first 2-person team or 2 vs 2 match event, set up the **Season teams** in the league office (two players each). Before the first match play event, set the **Match play points** for a win and a halve.
+
+1. **Setup:** format (and team size, scores that count, or singles / 2 vs 2), course, tees, 9-hole par/rating/slope, simulator settings. Best ball, shamble and match play also need the **stroke index** for holes 1–9 from the course card.
 2. **Sessions:** Day 1 date and start time; add Day 2 if 5+ players (defaults to the next day).
-3. **Groups:** assign each player to Day 1 or Day 2, up to 4 per session.
+3. **Groups:** assign each player to Day 1 or Day 2, up to 4 per session. 2-person formats assign season teams as pairs (two teams per session); 4-person formats need exactly four per day; match play singles puts each player in Match 1 or Match 2.
 4. **Lock & confirm handicaps:** review each player's index → 9-hole CH → 80% strokes, then lock. You can unlock again only until the first score is entered.
-5. **Scores:** enter hole-by-hole and save. Sign out after Day 1 if you like; it's all in the database. Mark each day complete when everyone is Completed, Did not finish or Did not attend.
+5. **Scores:** enter hole-by-hole and save. Scramble and alternate shot have one card per team; best ball, shamble and match play keep each player's own gross card and apply strokes hole by hole. Sign out after Day 1 if you like; it's all in the database. Mark each day complete when everyone is Completed, Did not finish or Did not attend.
 6. **Publish:** preview the combined leaderboard and points, then publish. **Unpublish to correct** takes results down (scores go private again) so you can fix a mistake.
 
 ---
@@ -49,6 +58,9 @@ Without Supabase keys the app runs as a **demo league** in the browser, so you c
    1. `20261116000001_core.sql`
    2. `20261116000002_event_sessions.sql`
    3. `20261116000003_event_workflow.sql`
+   4. `20261116000004_api_grants.sql` (lets the website read the tables; newer Supabase projects don't do this automatically)
+   5. `20261119000005_scramble.sql` (season teams)
+   6. `20261119000006_formats.sql` (scramble, alternate shot, shamble, best ball and match play; carries over any scramble data)
 3. Run `supabase/seed.sql` for the demo season (8 players, Event 1 split across Mon Nov 2 / Tue Nov 3 with official results, Event 2 showing "Day 2 pending"). **For a clean real season**, skip the seed and run this instead:
    ```sql
    insert into league_settings (id, season_year) values (1, 2026);
@@ -85,6 +97,9 @@ Tap **Commissioner** in the top menu and sign in. The device stays signed in unt
 - **New season:** in the Supabase SQL editor run `select app_private.create_season_core(2027); update league_settings set season_year = 2027;`. That creates Events 1–5 for the new season and switches the site to it; past seasons stay in the database.
 
 ## Decisions worth knowing
+- **Team members who can't make it:** in 2-person card formats (scramble, alternate shot) mark the team Did not attend, or swap a player on the team before locking. In best ball and shamble a team can still finish if enough partners post scores on every hole.
+- **Shamble allowance:** the WHS has no official shamble allowance, so it uses the best-ball allowances.
+- **Rounding:** like individual play, team and match handicaps round once at the end (halves up).
 - **Handicap rounding:** the rules say convert, apply 80%, then round, so the app rounds once at the end (halves round up). WHS proper rounds the Course Handicap first; this can differ by a stroke on rare .5 cases.
 - **Lock timing:** scoring is blocked until the event is locked, and the commissioner page warns if Day 1's start time has passed without a lock. It doesn't hard-block a late lock, so a forgotten lock can't strand an event.
 - **Unresolved field sizes:** 5-, 6- or 7-player fields can be scheduled and scored, but publishing is refused until the league decides how to score them. Add rows to `points_tables` for that field size to resolve it.
@@ -95,7 +110,7 @@ Tap **Commissioner** in the top menu and sign in. The device stays signed in unt
 ```bash
 npm install
 npm run dev        # demo league at http://localhost:5173 (no Supabase needed)
-npm test           # 38 tests: rules engine, the five acceptance checks, and the SQL migrations run in PGlite (Postgres in WASM)
+npm test           # 72 tests: rules engine, the five acceptance checks, and the SQL migrations run in PGlite (Postgres in WASM)
 npm run build      # type-check + production build
 npx tsx scripts/generate-seed.ts   # regenerate supabase/seed.sql from src/data/demoSeed.ts
 ```

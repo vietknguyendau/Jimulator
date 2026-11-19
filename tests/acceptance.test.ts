@@ -16,7 +16,7 @@ const flat = (gross: number) => {
 let kv: KV;
 let repo: LocalRepo;
 let seed: Snapshot;
-const EV = demoIds.eid(4); // empty draft event in the demo season
+const EV = demoIds.eid(5); // empty draft event in the demo season
 
 async function signIn() {
   await repo.signIn(DEMO_COMMISSIONER.email, DEMO_COMMISSIONER.password);

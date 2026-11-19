@@ -1,7 +1,9 @@
 import type { LeagueEvent, LeagueSettings, Player, ResultStatus, SimSettings, Snapshot, Team } from '../lib/types';
 
 export type EventSetupPatch = Partial<
-  Pick<LeagueEvent, 'name' | 'format' | 'course_name' | 'tees' | 'par9' | 'course_rating9' | 'slope9'> & { sim_settings: SimSettings }
+  Pick<LeagueEvent, 'name' | 'format' | 'team_size' | 'counting_scores' | 'match_type' | 'hole_si' | 'course_name' | 'tees' | 'par9' | 'course_rating9' | 'slope9'> & {
+    sim_settings: SimSettings;
+  }
 >;
 
 export type PlayerInput = Omit<Player, 'id'> & { id?: string };
@@ -16,7 +18,7 @@ export interface Repo {
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
 
-  updateSettings(patch: Partial<Pick<LeagueSettings, 'league_name' | 'field_size_basis'>>): Promise<void>;
+  updateSettings(patch: Partial<Pick<LeagueSettings, 'league_name' | 'field_size_basis' | 'match_win_points' | 'match_halve_points'>>): Promise<void>;
   savePlayer(p: PlayerInput): Promise<void>;
   saveTeam(t: TeamInput): Promise<void>;
   deleteTeam(teamId: string): Promise<void>;
@@ -27,13 +29,16 @@ export interface Repo {
   assign(eventId: string, sessionId: string, playerId: string): Promise<void>;
   moveAssignment(assignmentId: string, sessionId: string): Promise<void>;
   unassign(assignmentId: string): Promise<void>;
-  /** Scramble: put both teammates into a session together. */
+  /** 2-person formats: put both teammates into a session together. */
   assignTeam(eventId: string, sessionId: string, teamId: string): Promise<void>;
+  /** Match play singles: which match in the session this player is in. */
+  setMatchSlot(assignmentId: string, slot: 1 | 2 | null): Promise<void>;
 
   lockEvent(eventId: string): Promise<void>;
   unlockEvent(eventId: string): Promise<void>;
   saveScore(assignmentId: string, holes: (number | null)[], status: ResultStatus): Promise<void>;
-  saveTeamScore(eventId: string, teamId: string, holes: (number | null)[], status: ResultStatus): Promise<void>;
+  /** One-card team formats (scramble, alternate shot). */
+  saveEntryScore(entryId: string, holes: (number | null)[], status: ResultStatus): Promise<void>;
   resolveSession(sessionId: string): Promise<void>;
   reopenSession(sessionId: string): Promise<void>;
   publishEvent(eventId: string): Promise<void>;

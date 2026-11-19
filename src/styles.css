@@ -241,3 +241,14 @@ input[type='radio'] { width: auto; min-height: 0; accent-color: var(--turf); }
   .wm-text { display: none; } /* the badge carries the name on narrow phones */
   .wm-badge { width: 36px; height: 36px; }
 }
+.si-row { display: grid; grid-template-columns: repeat(9, minmax(2.6rem, 1fr)); gap: 0.4rem; border: 0; padding: 0; margin: 0 0 1rem; }
+.si-row legend { font-size: 0.8rem; color: var(--muted); font-weight: 600; margin-bottom: 0.4rem; }
+.si-row label { text-align: center; }
+.si-row input { text-align: center; padding: 0.4rem 0.2rem; }
+@media (max-width: 520px) { .si-row { grid-template-columns: repeat(5, 1fr); } }
+.slot-pick { display: inline-flex; gap: 0.25rem; margin-left: auto; margin-right: 0.5rem; }
+.match-list { list-style: none; padding: 0 !important; margin: 0; display: grid; gap: 0.5rem; }
+.match-list li { display: grid; grid-template-columns: 1fr auto; grid-template-areas: 'day day' 'who res'; gap: 0.15rem 1rem; padding: 0.75rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); margin: 0 !important; }
+.match-list li > span:first-child { grid-area: day; }
+.match-list li > strong { grid-area: who; }
+.match-list li > .led { grid-area: res; text-align: right; }

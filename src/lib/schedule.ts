@@ -1,3 +1,4 @@
+import { formatProblems } from './formats';
 import { ratingComplete } from './handicap';
 import { addDays } from './time';
 import type { EventSession, LeagueEvent, Player, SessionAssignment, Team } from './types';
@@ -102,7 +103,7 @@ export function lockProblems(
     if (!p) continue;
     if (p.handicap_index == null) problems.push(`${p.name} has no handicap index.`);
   }
-  if (event.format === 'scramble') problems.push(...scrambleProblems(event, as, players, teams));
+  problems.push(...formatProblems(event, { sessions, assignments, teams, players }));
   return problems;
 }
 
@@ -110,26 +111,6 @@ export const teamOf = (teams: Team[], season: number, playerId: string) =>
   teams.find((t) => t.season_year === season && (t.player_a === playerId || t.player_b === playerId));
 
 export const teamName = (t: Team) => t.name.trim() || 'Team';
-
-/** Scramble: every assigned player is on a season team, and teammates play the same session. */
-export function scrambleProblems(event: LeagueEvent, as: SessionAssignment[], players: Player[], teams: Team[]): string[] {
-  const problems: string[] = [];
-  const name = (id: string) => players.find((p) => p.id === id)?.name ?? 'A player';
-  for (const a of as) {
-    const t = teamOf(teams, event.season_year, a.player_id);
-    if (!t) {
-      problems.push(`${name(a.player_id)} isn't on a scramble team. Add them to a team in the league office.`);
-      continue;
-    }
-    const mate = t.player_a === a.player_id ? t.player_b : t.player_a;
-    const ma = as.find((x) => x.player_id === mate);
-    if (!ma) problems.push(`${teamName(t)}: ${name(mate)} isn't assigned. Both teammates play together.`);
-    else if (ma.session_id !== a.session_id && a.player_id === t.player_a) {
-      problems.push(`${teamName(t)}: teammates must play the same day.`);
-    }
-  }
-  return [...new Set(problems)];
-}
 
 export function checkTeam(
   teams: Team[],

@@ -35,14 +35,3 @@ export function ratingComplete(e: {
 }): e is NineHoleRating {
   return e.par9 != null && e.course_rating9 != null && e.slope9 != null;
 }
-
-/** WHS recommended allowance for a 2-person scramble: 35% of the lower course handicap + 15% of the higher. */
-export const SCRAMBLE_LOW = 0.35;
-export const SCRAMBLE_HIGH = 0.15;
-
-/** Team strokes from the two players' unrounded 9-hole course handicaps, rounded once like individual play. */
-export function scrambleTeamStrokes(chA: number, chB: number): number {
-  const low = Math.min(chA, chB);
-  const high = Math.max(chA, chB);
-  return roundHalfUp(low * SCRAMBLE_LOW + high * SCRAMBLE_HIGH);
-}

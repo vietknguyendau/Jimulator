@@ -86,9 +86,9 @@ export interface TeamStandingRow {
   events: number;
 }
 
-/** Scramble events only: the points each team earned (every teammate also gets them individually). */
+/** Points each season team earned in team and 2 vs 2 events (every teammate also gets them individually). */
 export function teamStandings(teams: Team[], events: LeagueEvent[], results: EventResult[]): TeamStandingRow[] {
-  const published = new Set(events.filter((e) => e.status === 'published' && e.format === 'scramble').map((e) => e.id));
+  const published = new Set(events.filter((e) => e.status === 'published' && e.format !== 'individual').map((e) => e.id));
   return teams
     .map((team) => {
       const perEvent = new Map<string, EventResult>();

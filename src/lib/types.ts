@@ -8,6 +8,9 @@ export interface LeagueSettings {
   /** Commissioner-approved rule: does field size count everyone who teed off, or only 9-hole finishers? */
   field_size_basis: FieldSizeBasis;
   time_zone: string; // always America/Chicago for this league
+  /** Match play points per player; null until the commissioner sets them. */
+  match_win_points: number | null;
+  match_halve_points: number | null;
 }
 
 export type HandicapSource = 'ghin' | 'manual';
@@ -31,12 +34,20 @@ export interface SimSettings {
   mulligans: string;
 }
 
-export type EventFormat = 'individual' | 'scramble';
+export type EventFormat = 'individual' | 'scramble' | 'alt_shot' | 'shamble' | 'best_ball' | 'match_play';
+export type MatchType = 'singles' | 'fourball';
 
 export interface LeagueEvent {
   id: string;
-  /** Individual stroke play, or 2-person team scramble with the season teams. */
   format: EventFormat;
+  /** Team formats: 2 (season teams) or 4 (each session's group is a team). */
+  team_size: 2 | 4;
+  /** Best ball / shamble: how many net scores count on each hole. */
+  counting_scores: number;
+  /** Match play: 1 vs 1, or 2 vs 2 best ball with season teams. */
+  match_type: MatchType;
+  /** Stroke index from the course card (1–18) for holes 1–9; needed when strokes fall hole by hole. */
+  hole_si: (number | null)[] | null;
   season_year: number;
   event_number: number; // 1..5
   name: string;
@@ -75,6 +86,8 @@ export interface SessionAssignment {
   course_handicap: number | null; // unrounded 9-hole course handicap
   strokes: number | null; // 80% allowance, rounded
   handicap_confirmed_at: string | null;
+  /** Match play singles: players with the same slot in a session play each other. */
+  match_slot: 1 | 2 | null;
 }
 
 export type ResultStatus = 'pending' | 'completed' | 'dnf' | 'dna';
@@ -90,8 +103,12 @@ export interface RoundScore {
 export interface EventResult {
   event_id: string;
   player_id: string;
-  /** Set for scramble events: both teammates share the team's result. */
+  /** Season team, when the player's entry was one. */
   team_id: string | null;
+  /** The team / match entry this result came from (team and match formats). */
+  entry_id: string | null;
+  /** Match play: e.g. "Won 2 up vs Austin". */
+  detail: string | null;
   session_number: number;
   status: Exclude<ResultStatus, 'pending'>;
   position: number | null;
@@ -111,23 +128,32 @@ export interface Team {
   player_b: string;
 }
 
-/** A team's entry in one scramble event, with its handicap snapshot from lock time. */
-export interface EventTeam {
+/**
+ * One competitor in a team or match event, created when the event is locked:
+ * a season team, a 4-person session group, or (match play singles) one player.
+ */
+export interface EventEntry {
+  id: string;
   event_id: string;
-  team_id: string;
   session_id: string;
-  player_a: string;
-  player_b: string;
-  ch_a: number; // unrounded 9-hole course handicaps
-  ch_b: number;
-  strokes: number; // 35% of the lower + 15% of the higher, rounded once
+  team_id: string | null; // season team, when the entry is one
+  match_slot: 1 | 2 | null;
+  /** Team strokes for one-card formats (scramble, alternate shot). */
+  strokes: number | null;
   confirmed_at: string;
 }
 
-/** One scramble scorecard per team. Private until the event is published. */
-export interface TeamRoundScore {
-  event_id: string;
-  team_id: string;
+export interface EntryMember {
+  entry_id: string;
+  player_id: string;
+  course_handicap: number; // unrounded 9-hole course handicap
+  /** Per-hole formats: strokes this player receives over 9 holes (match play: off the low player). */
+  playing_handicap: number | null;
+}
+
+/** One card per team for scramble / alternate shot. Private until published. */
+export interface EntryScore {
+  entry_id: string;
   hole_scores: (number | null)[];
   status: ResultStatus;
   updated_at: string;
@@ -143,7 +169,8 @@ export interface Snapshot {
   scores: RoundScore[];
   results: EventResult[];
   teams: Team[];
-  eventTeams: EventTeam[];
+  entries: EventEntry[];
+  entryMembers: EntryMember[];
   /** Only the rows the current viewer may see. */
-  teamScores: TeamRoundScore[];
+  entryScores: EntryScore[];
 }

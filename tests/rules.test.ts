@@ -126,11 +126,11 @@ describe('league time zone', () => {
 describe('season standings and tiebreakers', () => {
   const p = (id: string): Player => ({ id, name: id, ghin_number: null, handicap_index: 10, handicap_source: 'ghin', active: true });
   const ev = (id: string): LeagueEvent => ({
-    id, season_year: 2026, event_number: 1, name: id, course_name: 'x', tees: 'x', par9: 36, course_rating9: 36, slope9: 113,
+    id, format: 'individual', team_size: 2, counting_scores: 1, match_type: 'singles', hole_si: null, season_year: 2026, event_number: 1, name: id, course_name: 'x', tees: 'x', par9: 36, course_rating9: 36, slope9: 113,
     sim_settings: { green_speed: '', fairway_firmness: '', wind: '', putting: '', mulligans: '' }, status: 'published', locked_at: null, published_at: null,
   });
   const r = (event: string, player: string, position: number | null, points: number, net: number | null): EventResult => ({
-    event_id: event, player_id: player, session_number: 1, status: net == null ? 'dna' : 'completed', position, tied: false, gross: net, strokes: 0, net, points,
+    event_id: event, player_id: player, team_id: null, entry_id: null, detail: null, session_number: 1, status: net == null ? 'dna' : 'completed', position, tied: false, gross: net, strokes: 0, net, points,
   });
 
   it('breaks a points tie by most first-place finishes', () => {
