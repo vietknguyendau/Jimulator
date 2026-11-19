@@ -106,3 +106,19 @@ export function ordinal(n: number): string {
 export function formatPoints(p: number): string {
   return Number.isInteger(p) ? String(p) : p.toFixed(2).replace(/0$/, '');
 }
+
+export interface TeamEntry {
+  team_id: string;
+  session_number: number;
+  status: ResultStatus;
+  hole_scores: (number | null)[];
+  strokes: number | null;
+}
+
+/** Scramble: one combined leaderboard of teams. Field size counts teams. */
+export function buildTeamLeaderboard(entries: TeamEntry[], basis: FieldSizeBasis): Leaderboard {
+  return buildLeaderboard(
+    entries.map((e) => ({ ...e, player_id: e.team_id })),
+    basis,
+  );
+}

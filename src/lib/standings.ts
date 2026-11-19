@@ -1,4 +1,4 @@
-import type { EventResult, LeagueEvent, Player } from './types';
+import type { EventResult, LeagueEvent, Player, Team } from './types';
 
 export interface StandingRow {
   player: Player;
@@ -77,4 +77,29 @@ export function seasonStandings(players: Player[], events: LeagueEvent[], result
   const seasonComplete = events.length >= 5 && events.every((e) => e.status === 'published');
   for (const r of rows) r.playoff = seasonComplete && r.tied && r.rank === 1;
   return rows;
+}
+
+export interface TeamStandingRow {
+  team: Team;
+  points: number;
+  firsts: number;
+  events: number;
+}
+
+/** Scramble events only: the points each team earned (every teammate also gets them individually). */
+export function teamStandings(teams: Team[], events: LeagueEvent[], results: EventResult[]): TeamStandingRow[] {
+  const published = new Set(events.filter((e) => e.status === 'published' && e.format === 'scramble').map((e) => e.id));
+  return teams
+    .map((team) => {
+      const perEvent = new Map<string, EventResult>();
+      for (const r of results) if (r.team_id === team.id && published.has(r.event_id)) perEvent.set(r.event_id, r);
+      const rows = [...perEvent.values()];
+      return {
+        team,
+        points: Math.round(rows.reduce((t, r) => t + Number(r.points), 0) * 100) / 100,
+        firsts: rows.filter((r) => r.position === 1).length,
+        events: rows.filter((r) => r.status === 'completed').length,
+      };
+    })
+    .sort((a, b) => b.points - a.points || b.firsts - a.firsts || a.team.name.localeCompare(b.team.name));
 }

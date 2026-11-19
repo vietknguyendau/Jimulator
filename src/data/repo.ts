@@ -1,10 +1,11 @@
-import type { LeagueEvent, LeagueSettings, Player, ResultStatus, SimSettings, Snapshot } from '../lib/types';
+import type { LeagueEvent, LeagueSettings, Player, ResultStatus, SimSettings, Snapshot, Team } from '../lib/types';
 
 export type EventSetupPatch = Partial<
-  Pick<LeagueEvent, 'name' | 'course_name' | 'tees' | 'par9' | 'course_rating9' | 'slope9'> & { sim_settings: SimSettings }
+  Pick<LeagueEvent, 'name' | 'format' | 'course_name' | 'tees' | 'par9' | 'course_rating9' | 'slope9'> & { sim_settings: SimSettings }
 >;
 
 export type PlayerInput = Omit<Player, 'id'> & { id?: string };
+export type TeamInput = Omit<Team, 'id'> & { id?: string };
 
 /** Everything the UI needs from storage. Implemented by Supabase (production) and a local demo store. */
 export interface Repo {
@@ -17,6 +18,8 @@ export interface Repo {
 
   updateSettings(patch: Partial<Pick<LeagueSettings, 'league_name' | 'field_size_basis'>>): Promise<void>;
   savePlayer(p: PlayerInput): Promise<void>;
+  saveTeam(t: TeamInput): Promise<void>;
+  deleteTeam(teamId: string): Promise<void>;
 
   updateEvent(eventId: string, patch: EventSetupPatch): Promise<void>;
   saveSession(eventId: string, sessionNumber: 1 | 2, date: string, startTime: string): Promise<void>;
@@ -24,20 +27,23 @@ export interface Repo {
   assign(eventId: string, sessionId: string, playerId: string): Promise<void>;
   moveAssignment(assignmentId: string, sessionId: string): Promise<void>;
   unassign(assignmentId: string): Promise<void>;
+  /** Scramble: put both teammates into a session together. */
+  assignTeam(eventId: string, sessionId: string, teamId: string): Promise<void>;
 
   lockEvent(eventId: string): Promise<void>;
   unlockEvent(eventId: string): Promise<void>;
   saveScore(assignmentId: string, holes: (number | null)[], status: ResultStatus): Promise<void>;
+  saveTeamScore(eventId: string, teamId: string, holes: (number | null)[], status: ResultStatus): Promise<void>;
   resolveSession(sessionId: string): Promise<void>;
   reopenSession(sessionId: string): Promise<void>;
   publishEvent(eventId: string): Promise<void>;
   unpublishEvent(eventId: string): Promise<void>;
 }
 
-export function checkScoreEntry(holes: (number | null)[], status: ResultStatus): void {
+export function checkScoreEntry(holes: (number | null)[], status: ResultStatus, who: 'player' | 'team' = 'player'): void {
   if (holes.length !== 9) throw new Error('A round has 9 holes.');
   for (const h of holes) if (h != null && (!Number.isInteger(h) || h < 1 || h > 20)) throw new Error('Hole scores must be 1–20 strokes.');
   const played = holes.filter((h) => h != null).length;
-  if (status === 'completed' && played !== 9) throw new Error('A player must finish all 9 holes to be marked completed.');
-  if (status === 'dna' && played > 0) throw new Error("A player who did not attend can't have hole scores.");
+  if (status === 'completed' && played !== 9) throw new Error(`A ${who} must finish all 9 holes to be marked completed.`);
+  if (status === 'dna' && played > 0) throw new Error(`A ${who} that did not attend can't have hole scores.`);
 }

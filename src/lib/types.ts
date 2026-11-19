@@ -31,8 +31,12 @@ export interface SimSettings {
   mulligans: string;
 }
 
+export type EventFormat = 'individual' | 'scramble';
+
 export interface LeagueEvent {
   id: string;
+  /** Individual stroke play, or 2-person team scramble with the season teams. */
+  format: EventFormat;
   season_year: number;
   event_number: number; // 1..5
   name: string;
@@ -86,6 +90,8 @@ export interface RoundScore {
 export interface EventResult {
   event_id: string;
   player_id: string;
+  /** Set for scramble events: both teammates share the team's result. */
+  team_id: string | null;
   session_number: number;
   status: Exclude<ResultStatus, 'pending'>;
   position: number | null;
@@ -94,6 +100,37 @@ export interface EventResult {
   strokes: number | null;
   net: number | null;
   points: number;
+}
+
+/** Fixed 2-person scramble team for a season. */
+export interface Team {
+  id: string;
+  season_year: number;
+  name: string;
+  player_a: string;
+  player_b: string;
+}
+
+/** A team's entry in one scramble event, with its handicap snapshot from lock time. */
+export interface EventTeam {
+  event_id: string;
+  team_id: string;
+  session_id: string;
+  player_a: string;
+  player_b: string;
+  ch_a: number; // unrounded 9-hole course handicaps
+  ch_b: number;
+  strokes: number; // 35% of the lower + 15% of the higher, rounded once
+  confirmed_at: string;
+}
+
+/** One scramble scorecard per team. Private until the event is published. */
+export interface TeamRoundScore {
+  event_id: string;
+  team_id: string;
+  hole_scores: (number | null)[];
+  status: ResultStatus;
+  updated_at: string;
 }
 
 export interface Snapshot {
@@ -105,4 +142,8 @@ export interface Snapshot {
   /** Only the rows the current viewer may see (commissioner, or published events). */
   scores: RoundScore[];
   results: EventResult[];
+  teams: Team[];
+  eventTeams: EventTeam[];
+  /** Only the rows the current viewer may see. */
+  teamScores: TeamRoundScore[];
 }

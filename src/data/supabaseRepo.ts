@@ -1,9 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { checkAssignment, checkSessionDate, checkStartTime } from '../lib/schedule';
+import { checkAssignment, checkSessionDate, checkStartTime, checkTeam, checkTeamAssignment } from '../lib/schedule';
 import type {
-  EventResult, EventSession, LeagueEvent, LeagueSettings, Player, ResultStatus, RoundScore, SessionAssignment, Snapshot,
+  EventResult, EventSession, EventTeam, LeagueEvent, LeagueSettings, Player, ResultStatus, RoundScore, SessionAssignment, Snapshot, Team,
+  TeamRoundScore,
 } from '../lib/types';
-import { checkScoreEntry, type EventSetupPatch, type PlayerInput, type Repo } from './repo';
+import { checkScoreEntry, type EventSetupPatch, type PlayerInput, type Repo, type TeamInput } from './repo';
 
 const num = (x: unknown) => (x == null ? null : Number(x));
 
@@ -23,7 +24,7 @@ export class SupabaseRepo implements Repo {
   }
 
   async load(): Promise<Snapshot> {
-    const [settings, players, events, sessions, assignments, scores, results] = await Promise.all([
+    const [settings, players, events, sessions, assignments, scores, results, teams, eventTeams, teamScores] = await Promise.all([
       this.sb.from('league_settings').select('*').eq('id', 1).single(),
       this.sb.from('players').select('*').order('name'),
       this.sb.from('events').select('*').order('season_year').order('event_number'),
@@ -31,6 +32,9 @@ export class SupabaseRepo implements Repo {
       this.sb.from('session_assignments').select('*'),
       this.sb.from('round_scores').select('*'), // RLS: commissioner, or published events only
       this.sb.from('event_results').select('*'),
+      this.sb.from('teams').select('*').order('name'),
+      this.sb.from('event_teams').select('*'),
+      this.sb.from('team_round_scores').select('*'), // RLS: commissioner, or published events only
     ]);
     const st = unwrap(settings) as LeagueSettings;
     const snap: Snapshot = {
@@ -43,6 +47,9 @@ export class SupabaseRepo implements Repo {
       })),
       scores: unwrap(scores) as RoundScore[],
       results: unwrap(results).map((r: EventResult) => ({ ...r, points: Number(r.points) })),
+      teams: unwrap(teams) as Team[],
+      eventTeams: unwrap(eventTeams).map((t: EventTeam) => ({ ...t, ch_a: Number(t.ch_a), ch_b: Number(t.ch_b) })),
+      teamScores: unwrap(teamScores) as TeamRoundScore[],
     };
     this.cache = snap;
     return snap;
@@ -82,6 +89,40 @@ export class SupabaseRepo implements Repo {
     const { id, ...rest } = p;
     if (id) unwrap(await this.sb.from('players').update(rest).eq('id', id));
     else unwrap(await this.sb.from('players').insert(rest));
+  }
+
+  async saveTeam(t: TeamInput) {
+    const s = await this.snap();
+    checkTeam(s.teams, s.players, t); // the database checks again
+    const { id, ...rest } = t;
+    if (id) unwrap(await this.sb.from('teams').update(rest).eq('id', id));
+    else unwrap(await this.sb.from('teams').insert(rest));
+  }
+
+  async deleteTeam(teamId: string) {
+    const s = await this.snap();
+    if (s.eventTeams.some((x) => x.team_id === teamId) || s.results.some((r) => r.team_id === teamId)) {
+      throw new Error("This team has played or is locked into an event, so it can't be removed. Rename it or change players instead.");
+    }
+    unwrap(await this.sb.from('teams').delete().eq('id', teamId));
+  }
+
+  async assignTeam(eventId: string, sessionId: string, teamId: string) {
+    const s = await this.snap();
+    const team = s.teams.find((t) => t.id === teamId);
+    if (!team) throw new Error('Team not found.');
+    checkTeamAssignment(s.sessions, s.assignments, eventId, sessionId, team);
+    unwrap(
+      await this.sb.from('session_assignments').insert([
+        { event_id: eventId, session_id: sessionId, player_id: team.player_a },
+        { event_id: eventId, session_id: sessionId, player_id: team.player_b },
+      ]),
+    );
+  }
+
+  async saveTeamScore(eventId: string, teamId: string, holes: (number | null)[], status: ResultStatus) {
+    checkScoreEntry(holes, status, 'team');
+    unwrap(await this.sb.from('team_round_scores').upsert({ event_id: eventId, team_id: teamId, hole_scores: holes, status }));
   }
 
   async updateEvent(eventId: string, patch: EventSetupPatch) {

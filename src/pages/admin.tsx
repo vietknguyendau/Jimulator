@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../app';
-import { eventSessions, PhaseBadge, playerName, pos, pts, Section, SessionLine } from '../components';
+import { eventSessions, PhaseBadge, playerName, pos, pts, Section, SessionLine, teamPlayers } from '../components';
 import { DEMO_COMMISSIONER } from '../data/localRepo';
 import { eventPhase } from '../lib/eventPhase';
-import { ratingComplete, strokesReceived } from '../lib/handicap';
-import { buildLeaderboard, grossOf, holesPlayed } from '../lib/leaderboard';
+import { ratingComplete, SCRAMBLE_HIGH, SCRAMBLE_LOW, scrambleTeamStrokes, strokesReceived } from '../lib/handicap';
+import { buildLeaderboard, buildTeamLeaderboard, grossOf, holesPlayed } from '../lib/leaderboard';
 import { countField } from '../lib/points';
-import { lockProblems, MAX_PER_SESSION } from '../lib/schedule';
+import { lockProblems, MAX_PER_SESSION, MAX_TEAMS, teamName, teamOf } from '../lib/schedule';
 import { addDays, formatSessionDate, formatStartTime, leagueInstant } from '../lib/time';
-import type { EventSession, LeagueEvent, Player, ResultStatus, SimSettings } from '../lib/types';
-import { entriesFor } from '../data/localRepo';
+import type { EventFormat, EventSession, LeagueEvent, Player, ResultStatus, SimSettings, Team } from '../lib/types';
+import { entriesFor, teamEntriesFor, teamTableReason } from '../data/localRepo';
 
 // ---------------------------------------------------------------------------
 export function AdminHome() {
@@ -80,6 +80,7 @@ function AdminDashboard() {
       </Section>
 
       <Players />
+      <Teams />
       <Settings />
       {repo.mode === 'demo' && (
         <Section title="Demo data">
@@ -120,6 +121,72 @@ function Settings() {
       </div>
       <p className="fine">No-shows never count. Field sizes other than 4 or 8 can't be published until you decide how to score them.</p>
     </Section>
+  );
+}
+
+function Teams() {
+  const { snap } = useApp();
+  const season = snap.settings.season_year;
+  const teams = snap.teams.filter((t) => t.season_year === season);
+  const [adding, setAdding] = useState(false);
+  const free = snap.players.filter((p) => p.active && !teamOf(snap.teams, season, p.id));
+  return (
+    <Section
+      title="Scramble teams"
+      kicker={`Season ${season} · fixed 2-person teams · ${teams.length} of ${MAX_TEAMS}`}
+      actions={teams.length < MAX_TEAMS && !adding ? <button className="btn" onClick={() => setAdding(true)}>Add team</button> : undefined}
+    >
+      <div className="player-list">
+        {teams.map((t) => <TeamRow key={t.id} t={t} />)}
+        {adding && <TeamRow onDone={() => setAdding(false)} />}
+        {teams.length === 0 && !adding && <p className="muted">No teams yet. Teams are only needed for scramble events.</p>}
+      </div>
+      {free.length > 0 && teams.length > 0 && <p className="fine">Not on a team: {free.map((p) => p.name).join(', ')}.</p>}
+      <p className="fine">Teams stay together all season. In a scramble event, both teammates play the same day and every teammate earns the team's points.</p>
+    </Section>
+  );
+}
+
+function TeamRow({ t, onDone }: { t?: Team; onDone?: () => void }) {
+  const { snap, repo, act } = useApp();
+  const season = snap.settings.season_year;
+  const [name, setName] = useState(t?.name ?? '');
+  const [a, setA] = useState(t?.player_a ?? '');
+  const [b, setB] = useState(t?.player_b ?? '');
+  const options = (current: string, other: string) =>
+    snap.players.filter((p) => p.active && p.id !== other && (p.id === current || !teamOf(snap.teams.filter((x) => x.id !== t?.id), season, p.id)));
+  const dirty = !t || name !== t.name || a !== t.player_a || b !== t.player_b;
+  const autoName = (x: string, y: string) => {
+    const n = (id: string) => snap.players.find((p) => p.id === id)?.name;
+    if (!name.trim() && x && y) setName(`${n(x)} & ${n(y)}`);
+  };
+  return (
+    <div className="team-row">
+      <input aria-label="Team name" placeholder="Team name" value={name} onChange={(e) => setName(e.target.value)} />
+      <select aria-label="First player" value={a} onChange={(e) => { setA(e.target.value); autoName(e.target.value, b); }}>
+        <option value="">Player…</option>
+        {options(a, b).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      <select aria-label="Second player" value={b} onChange={(e) => { setB(e.target.value); autoName(a, e.target.value); }}>
+        <option value="">Player…</option>
+        {options(b, a).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      <div className="row-actions">
+        {dirty && (
+          <button
+            className="btn btn-primary"
+            onClick={async () => {
+              const ok = await act(() => repo.saveTeam({ id: t?.id, season_year: season, name: name.trim(), player_a: a, player_b: b }), t ? 'Team saved.' : 'Team added.');
+              if (ok) onDone?.();
+            }}
+          >
+            Save
+          </button>
+        )}
+        {t && !dirty && <button className="btn btn-quiet" onClick={() => act(() => repo.deleteTeam(t.id), 'Team removed.')}>Remove</button>}
+        {!t && <button className="btn btn-quiet" onClick={onDone}>Cancel</button>}
+      </div>
+    </div>
   );
 }
 
@@ -233,7 +300,7 @@ function Setup({ e }: { e: LeagueEvent }) {
   const { repo, act } = useApp();
   const locked = e.status !== 'draft';
   const init = () => ({
-    name: e.name, course_name: e.course_name, tees: e.tees,
+    name: e.name, format: e.format, course_name: e.course_name, tees: e.tees,
     par9: e.par9?.toString() ?? '', course_rating9: e.course_rating9?.toString() ?? '', slope9: e.slope9?.toString() ?? '',
     sim: { ...e.sim_settings },
   });
@@ -246,6 +313,7 @@ function Setup({ e }: { e: LeagueEvent }) {
         repo.updateEvent(e.id, {
           name: f.name.trim() || e.name,
           ...(locked ? {} : {
+            format: f.format,
             course_name: f.course_name.trim(), tees: f.tees.trim(),
             par9: toNum(f.par9), course_rating9: toNum(f.course_rating9), slope9: toNum(f.slope9), sim_settings: f.sim,
           }),
@@ -253,10 +321,16 @@ function Setup({ e }: { e: LeagueEvent }) {
       'Event setup saved.',
     );
   return (
-    <Section title="Course & simulator" kicker="Step 1 · shared by both sessions">
+    <Section title="Format, course & simulator" kicker="Step 1 · shared by both sessions">
       {locked && <p className="locked-note">Locked. Course, tees, rating and simulator settings can't change now.</p>}
       <div className="form grid">
         <label className="span2">Event name<input value={f.name} onChange={(x) => setF({ ...f, name: x.target.value })} /></label>
+        <label className="span2">Format
+          <select disabled={locked} value={f.format} onChange={(x) => setF({ ...f, format: x.target.value as EventFormat })}>
+            <option value="individual">Individual stroke play</option>
+            <option value="scramble">2-person team scramble</option>
+          </select>
+        </label>
         <label className="span2">Simulator course<input disabled={locked} value={f.course_name} onChange={(x) => setF({ ...f, course_name: x.target.value })} placeholder="e.g. Pebble Beach — Front 9" /></label>
         <label>Tees<input disabled={locked} value={f.tees} onChange={(x) => setF({ ...f, tees: x.target.value })} /></label>
         <label>9-hole par<input disabled={locked} inputMode="numeric" value={f.par9} onChange={(x) => setF({ ...f, par9: x.target.value })} /></label>
@@ -268,6 +342,9 @@ function Setup({ e }: { e: LeagueEvent }) {
           </label>
         ))}
       </div>
+      {f.format === 'scramble' && (
+        <p className="fine">Scramble: the season teams play as pairs, both teammates on the same day. Team strokes are {SCRAMBLE_LOW * 100}% of the lower 9-hole course handicap plus {SCRAMBLE_HIGH * 100}% of the higher.</p>
+      )}
       <button className="btn btn-primary" onClick={save}>Save setup</button>
     </Section>
   );
@@ -317,6 +394,93 @@ function SessionEditor({ e, n, s }: { e: LeagueEvent; n: 1 | 2; s?: EventSession
 }
 
 function Groups({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] }) {
+  if (e.format === 'scramble') return <TeamGroups e={e} sessions={sessions} />;
+  return <PlayerGroups e={e} sessions={sessions} />;
+}
+
+/** Scramble groups: teams go into a session as a pair, two teams per session. */
+function TeamGroups({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] }) {
+  const { snap, repo, act } = useApp();
+  const locked = e.status !== 'draft';
+  const mine = snap.assignments.filter((a) => a.event_id === e.id);
+  const teams = snap.teams.filter((t) => t.season_year === e.season_year);
+  const sessionOf = (t: Team) => mine.find((a) => a.player_id === t.player_a)?.session_id ?? mine.find((a) => a.player_id === t.player_b)?.session_id;
+  const unassigned = teams.filter((t) => !sessionOf(t));
+  const loose = mine.filter((a) => !teamOf(snap.teams, e.season_year, a.player_id));
+  const removeTeam = (t: Team) =>
+    act(async () => {
+      for (const a of mine.filter((x) => x.player_id === t.player_a || x.player_id === t.player_b)) await repo.unassign(a.id);
+    });
+  const moveTeam = (t: Team, to: string) =>
+    act(async () => {
+      for (const a of mine.filter((x) => x.player_id === t.player_a || x.player_id === t.player_b)) await repo.moveAssignment(a.id, to);
+    });
+  if (!sessions.length) {
+    return <Section title="Teams by day" kicker="Step 3"><p className="muted">Schedule Day 1 first.</p></Section>;
+  }
+  return (
+    <Section title="Teams by day" kicker={`Step 3 · scramble · two teams per session`}>
+      {locked && <p className="locked-note">Locked. Unlock before any scores are entered to change groups.</p>}
+      {teams.length === 0 && <p className="warn">No scramble teams yet. Add them under League office → Scramble teams.</p>}
+      <div className="groups">
+        {sessions.map((s) => {
+          const here = teams.filter((t) => sessionOf(t) === s.id);
+          const other = sessions.find((x) => x.id !== s.id);
+          const count = mine.filter((a) => a.session_id === s.id).length;
+          return (
+            <div key={s.id} className="group">
+              <div className="group-head">
+                <SessionLine s={s} />
+                <span className={`count ${count === MAX_PER_SESSION ? 'full' : ''}`}>{count}/{MAX_PER_SESSION}</span>
+              </div>
+              <ul>
+                {here.map((t) => (
+                  <li key={t.id}>
+                    <span>
+                      <strong>{teamName(t)}</strong>
+                      {teamPlayers(snap, t) && <><br /><span className="team-players">{teamPlayers(snap, t)}</span></>}
+                    </span>
+                    {!locked && (
+                      <span className="row-actions">
+                        {other && <button className="btn btn-quiet btn-sm" onClick={() => moveTeam(t, other.id)}>→ Day {other.session_number}</button>}
+                        <button className="btn btn-quiet btn-sm" aria-label={`Remove ${teamName(t)}`} onClick={() => removeTeam(t)}>✕</button>
+                      </span>
+                    )}
+                  </li>
+                ))}
+                {here.length === 0 && <li className="muted">Empty</li>}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+      {loose.length > 0 && (
+        <div className="warn">
+          <p>Not on a team: {loose.map((a) => playerName(snap, a.player_id)).join(', ')}. Add them to a team or remove them from this event.</p>
+          {!locked && loose.map((a) => <button key={a.id} className="btn btn-quiet btn-sm" onClick={() => act(() => repo.unassign(a.id))}>Remove {playerName(snap, a.player_id)}</button>)}
+        </div>
+      )}
+      {!locked && unassigned.length > 0 && (
+        <div className="pool">
+          <p className="eyebrow">Teams not assigned</p>
+          {unassigned.map((t) => (
+            <div key={t.id} className="pool-row">
+              <span>{teamName(t)} {teamPlayers(snap, t) && <span className="team-players">({teamPlayers(snap, t)})</span>}</span>
+              <span className="row-actions">
+                {sessions.map((s) => (
+                  <button key={s.id} className="btn btn-sm" onClick={() => act(() => repo.assignTeam(e.id, s.id, t.id))}>Day {s.session_number}</button>
+                ))}
+              </span>
+            </div>
+          ))}
+          <p className="fine">Teams left unassigned aren't in this event and their players get zero points.</p>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function PlayerGroups({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] }) {
   const { snap, repo, act } = useApp();
   const locked = e.status !== 'draft';
   const mine = snap.assignments.filter((a) => a.event_id === e.id);
@@ -380,11 +544,14 @@ function Groups({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] }) {
 function LockStep({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] }) {
   const { snap, repo, act } = useApp();
   const mine = snap.assignments.filter((a) => a.event_id === e.id);
-  const problems = e.status === 'draft' ? lockProblems(e, snap.sessions, snap.assignments, snap.players) : [];
+  const problems = e.status === 'draft' ? lockProblems(e, snap.sessions, snap.assignments, snap.players, snap.teams) : [];
   const first = sessions[0];
   const start = first ? leagueInstant(first.session_date, first.start_time) : null;
   const late = e.status === 'draft' && start != null && Date.now() >= start.getTime();
-  const anyScores = snap.scores.some((r) => mine.some((a) => a.id === r.assignment_id) && (r.status !== 'pending' || r.hole_scores.some((h) => h != null)));
+  const touched = (r: { status: ResultStatus; hole_scores: (number | null)[] }) => r.status !== 'pending' || r.hole_scores.some((h) => h != null);
+  const anyScores =
+    snap.scores.some((r) => mine.some((a) => a.id === r.assignment_id) && touched(r)) ||
+    snap.teamScores.some((r) => r.event_id === e.id && touched(r));
   const rows = mine
     .map((a) => {
       const p = snap.players.find((x) => x.id === a.player_id)!;
@@ -406,7 +573,8 @@ function LockStep({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] })
           {late ? 'Day 1 has already started. ' : ''}Lock before Day 1 tees off: {formatSessionDate(first!.session_date)} at {formatStartTime(first!.start_time)} Central. Scores can't be entered until the event is locked.
         </p>
       )}
-      {rows.length > 0 && (
+      {e.format === 'scramble' && rows.length > 0 && <ScrambleHandicaps e={e} rows={rows} />}
+      {e.format !== 'scramble' && rows.length > 0 && (
         <div className="table-wrap">
           <table className="board">
             <thead>
@@ -456,21 +624,110 @@ function LockStep({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] })
   );
 }
 
+function ScrambleHandicaps({ e, rows }: { e: LeagueEvent; rows: { p: Player; day?: number; ch: number | null }[] }) {
+  const { snap } = useApp();
+  const teams = snap.teams.filter((t) => t.season_year === e.season_year);
+  const byId = new Map(rows.map((r) => [r.p.id, r]));
+  const lines = teams
+    .map((t) => {
+      const a = byId.get(t.player_a);
+      const b = byId.get(t.player_b);
+      if (!a || !b) return null;
+      const confirmed = snap.eventTeams.find((x) => x.event_id === e.id && x.team_id === t.id);
+      const strokes = confirmed ? confirmed.strokes : a.ch != null && b.ch != null ? scrambleTeamStrokes(a.ch, b.ch) : null;
+      return { t, a, b, strokes, day: a.day };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null)
+    .sort((x, y) => (x.day ?? 0) - (y.day ?? 0));
+  const ch = (r: { p: Player; ch: number | null }) => `${r.p.name} ${r.ch != null ? r.ch.toFixed(2) : '—'}`;
+  return (
+    <div className="table-wrap">
+      <table className="board">
+        <thead>
+          <tr>
+            <th scope="col">Team</th><th scope="col">Day</th><th scope="col">9-hole course handicaps</th>
+            <th scope="col" className="num">Team strokes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((l) => (
+            <tr key={l.t.id}>
+              <td>{teamName(l.t)}</td>
+              <td>{l.day}</td>
+              <td className="muted small">{ch(l.a)} · {ch(l.b)}</td>
+              <td className="num led">{l.strokes ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="fine">Team strokes = {SCRAMBLE_LOW * 100}% of the lower course handicap + {SCRAMBLE_HIGH * 100}% of the higher, rounded to the nearest stroke.</p>
+    </div>
+  );
+}
+
 type Row = { holes: (number | null)[]; status: ResultStatus; dirty: boolean };
 
+/** One scorecard line: a player (individual) or a team (scramble). */
+interface CardLine {
+  key: string;
+  label: string;
+  sub?: string;
+  strokes: number | null;
+  holes: (number | null)[];
+  status: ResultStatus;
+}
+
 function Scoring({ e, s }: { e: LeagueEvent; s: EventSession }) {
-  const { snap, repo, act, toast } = useApp();
-  const group = useMemo(
-    () => snap.assignments.filter((a) => a.session_id === s.id).sort((x, y) => playerName(snap, x.player_id).localeCompare(playerName(snap, y.player_id))),
-    [snap, s.id],
-  );
-  const fromServer = () =>
-    Object.fromEntries(
-      group.map((a) => {
+  const { snap, repo } = useApp();
+  const scramble = e.format === 'scramble';
+  const lines: CardLine[] = useMemo(() => {
+    if (scramble) {
+      return snap.eventTeams
+        .filter((x) => x.event_id === e.id && x.session_id === s.id)
+        .map((x) => {
+          const t = snap.teams.find((y) => y.id === x.team_id);
+          const sc = snap.teamScores.find((r) => r.event_id === e.id && r.team_id === x.team_id);
+          return {
+            key: x.team_id,
+            label: t ? teamName(t) : 'Team',
+            sub: t ? teamPlayers(snap, t) ?? undefined : undefined,
+            strokes: x.strokes,
+            holes: sc?.hole_scores ?? Array(9).fill(null),
+            status: sc?.status ?? 'pending',
+          };
+        })
+        .sort((a, b) => a.label.localeCompare(b.label));
+    }
+    return snap.assignments
+      .filter((a) => a.session_id === s.id)
+      .map((a) => {
         const sc = snap.scores.find((r) => r.assignment_id === a.id);
-        return [a.id, { holes: sc?.hole_scores ?? Array(9).fill(null), status: sc?.status ?? 'pending', dirty: false } as Row];
-      }),
-    );
+        return {
+          key: a.id,
+          label: playerName(snap, a.player_id),
+          strokes: a.strokes,
+          holes: sc?.hole_scores ?? Array(9).fill(null),
+          status: sc?.status ?? 'pending',
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [snap, s.id, e.id, scramble]);
+  const save = (key: string, holes: (number | null)[], status: ResultStatus) =>
+    scramble ? repo.saveTeamScore(e.id, key, holes, status) : repo.saveScore(key, holes, status);
+  return <ScoreCard e={e} s={s} lines={lines} save={save} unit={scramble ? 'team' : 'player'} />;
+}
+
+function ScoreCard({
+  e, s, lines, save, unit,
+}: {
+  e: LeagueEvent;
+  s: EventSession;
+  lines: CardLine[];
+  save: (key: string, holes: (number | null)[], status: ResultStatus) => Promise<void>;
+  unit: 'player' | 'team';
+}) {
+  const { snap, repo, act, toast } = useApp();
+  const fromServer = () => Object.fromEntries(lines.map((l) => [l.key, { holes: l.holes, status: l.status, dirty: false } as Row]));
   const [rows, setRows] = useState<Record<string, Row>>(fromServer);
   useEffect(() => {
     // Keep unsaved edits; refresh everything else from the database.
@@ -483,6 +740,7 @@ function Scoring({ e, s }: { e: LeagueEvent; s: EventSession }) {
 
   const editable = e.status === 'locked' && s.status === 'scheduled';
   const dirtyIds = Object.keys(rows).filter((k) => rows[k].dirty);
+  const labelOf = (k: string) => lines.find((l) => l.key === k)?.label ?? '';
 
   const setHole = (id: string, i: number, v: string) => {
     setRows((cur) => {
@@ -507,11 +765,11 @@ function Scoring({ e, s }: { e: LeagueEvent; s: EventSession }) {
     for (const id of ids) {
       const r = rows[id];
       try {
-        await repo.saveScore(id, r.holes, r.status);
+        await save(id, r.holes, r.status);
         setRows((cur) => ({ ...cur, [id]: { ...cur[id], dirty: false } }));
       } catch (err) {
         ok = false;
-        toast(`${playerName(snap, group.find((a) => a.id === id)!.player_id)}: ${(err as Error).message}`, 'error');
+        toast(`${labelOf(id)}: ${(err as Error).message}`, 'error');
       }
     }
     await act(async () => {}, ok ? `Day ${s.session_number} scores saved.` : undefined);
@@ -520,7 +778,7 @@ function Scoring({ e, s }: { e: LeagueEvent; s: EventSession }) {
 
   return (
     <Section
-      title={`Day ${s.session_number} scores`}
+      title={`Day ${s.session_number} ${unit === 'team' ? 'team scores' : 'scores'}`}
       kicker={`Step 5 · ${formatSessionDate(s.session_date)} · private until published`}
       actions={s.status === 'resolved' ? <span className="badge badge-official">Day complete</span> : undefined}
     >
@@ -528,38 +786,41 @@ function Scoring({ e, s }: { e: LeagueEvent; s: EventSession }) {
         <table className="scorecard">
           <thead>
             <tr>
-              <th scope="col">Player</th>
+              <th scope="col">{unit === 'team' ? 'Team' : 'Player'}</th>
               {Array.from({ length: 9 }, (_, i) => <th key={i} scope="col" className="num">{i + 1}</th>)}
               <th scope="col" className="num">Gross</th><th scope="col" className="num">Hcp</th><th scope="col" className="num">Net</th>
               <th scope="col">Status</th>
             </tr>
           </thead>
           <tbody>
-            {group.map((a) => {
-              const r = rows[a.id];
+            {lines.map((l) => {
+              const r = rows[l.key];
               if (!r) return null;
               const played = holesPlayed(r.holes);
               const gross = played ? grossOf(r.holes) : null;
               return (
-                <tr key={a.id} className={r.dirty ? 'unsaved' : ''}>
-                  <th scope="row">{playerName(snap, a.player_id)}</th>
+                <tr key={l.key} className={r.dirty ? 'unsaved' : ''}>
+                  <th scope="row">
+                    {l.label}
+                    {l.sub && <span className="team-players"><br />{l.sub}</span>}
+                  </th>
                   {r.holes.map((h, i) => (
                     <td key={i}>
                       <input
                         className="hole"
                         inputMode="numeric"
-                        aria-label={`${playerName(snap, a.player_id)} hole ${i + 1}`}
+                        aria-label={`${l.label} hole ${i + 1}`}
                         disabled={!editable || r.status === 'dna'}
                         value={h ?? ''}
-                        onChange={(x) => setHole(a.id, i, x.target.value)}
+                        onChange={(x) => setHole(l.key, i, x.target.value)}
                       />
                     </td>
                   ))}
                   <td className="num">{gross ?? '—'}</td>
-                  <td className="num">{a.strokes}</td>
-                  <td className="num led">{r.status === 'completed' && gross != null ? gross - (a.strokes ?? 0) : '—'}</td>
+                  <td className="num">{l.strokes}</td>
+                  <td className="num led">{r.status === 'completed' && gross != null ? gross - (l.strokes ?? 0) : '—'}</td>
                   <td>
-                    <select aria-label={`${playerName(snap, a.player_id)} status`} disabled={!editable} value={r.status} onChange={(x) => setStatus(a.id, x.target.value as ResultStatus)}>
+                    <select aria-label={`${l.label} status`} disabled={!editable} value={r.status} onChange={(x) => setStatus(l.key, x.target.value as ResultStatus)}>
                       <option value="pending">In progress</option>
                       <option value="completed" disabled={played < 9}>Completed</option>
                       <option value="dnf">Did not finish</option>
@@ -593,38 +854,50 @@ function Scoring({ e, s }: { e: LeagueEvent; s: EventSession }) {
           <button className="btn btn-quiet" onClick={() => act(() => repo.reopenSession(s.id), `Day ${s.session_number} reopened.`)}>Reopen Day {s.session_number}</button>
         )}
       </div>
-      <p className="fine">Scores save to the league database, so you can sign out after Day 1 and pick up on Day 2. Completed requires all 9 holes.</p>
+      <p className="fine">
+        {unit === 'team' ? 'Enter one scramble score per hole for each team. ' : ''}Scores save to the league database, so you can sign out after Day 1 and pick up on Day 2. Completed requires all 9 holes.
+      </p>
     </Section>
   );
 }
 
 function Finalize({ e, sessions }: { e: LeagueEvent; sessions: EventSession[] }) {
   const { snap, repo, act } = useApp();
-  const entries = entriesFor(snap, e.id);
-  const lb = buildLeaderboard(entries, snap.settings.field_size_basis);
+  const scramble = e.format === 'scramble';
+  const entries = scramble ? teamEntriesFor(snap, e.id) : entriesFor(snap, e.id);
+  const lb = scramble
+    ? buildTeamLeaderboard(teamEntriesFor(snap, e.id), snap.settings.field_size_basis)
+    : buildLeaderboard(entriesFor(snap, e.id), snap.settings.field_size_basis);
   const field = countField(entries.map((x) => x.status));
+  const unit = scramble ? 'team' : 'player';
+  const label = (id: string) => {
+    if (!scramble) return playerName(snap, id);
+    const t = snap.teams.find((x) => x.id === id);
+    return t ? teamName(t) : 'Team';
+  };
   const openDays = sessions.filter((s) => s.status !== 'resolved');
   const blockers = [
     ...openDays.map((s) => `Mark Day ${s.session_number} complete.`),
-    ...(!lb.allResolved ? ['Every player must be marked completed, did not finish, or did not attend.'] : []),
-    ...(lb.allResolved && !lb.lookup.ok ? [lb.lookup.reason] : []),
+    ...(!lb.allResolved ? [`Every ${unit} must be marked completed, did not finish, or did not attend.`] : []),
+    ...(lb.allResolved && !lb.lookup.ok ? [scramble ? teamTableReason(lb.field) : lb.lookup.reason] : []),
   ];
   return (
-    <Section title={e.status === 'published' ? 'Official results' : 'Finalize & publish'} kicker="Step 6 · one combined leaderboard">
+    <Section title={e.status === 'published' ? 'Official results' : 'Finalize & publish'} kicker={`Step 6 · one combined ${scramble ? 'team ' : ''}leaderboard`}>
       <p className="muted">
-        Field: {field.starters} starters, {field.finishers} finishers. Counting {snap.settings.field_size_basis} → {lb.field}-player field
-        {lb.lookup.ok ? `, ${lb.field}-player points table.` : '.'}
+        Field: {field.starters} starting {unit}s, {field.finishers} finishing. Counting {snap.settings.field_size_basis} → {lb.field}-{unit} field
+        {lb.lookup.ok ? `, ${lb.field}-entry points table.` : '.'}
+        {scramble && ' Both teammates earn the team’s points.'}
       </p>
       <div className="table-wrap">
         <table className="board">
           <thead>
-            <tr><th scope="col">Pos</th><th scope="col">Player</th><th scope="col">Day</th><th scope="col" className="num">Net</th><th scope="col" className="num">Pts</th></tr>
+            <tr><th scope="col">Pos</th><th scope="col">{scramble ? 'Team' : 'Player'}</th><th scope="col">Day</th><th scope="col" className="num">Net</th><th scope="col" className="num">{scramble ? 'Pts each' : 'Pts'}</th></tr>
           </thead>
           <tbody>
             {lb.rows.map((r) => (
               <tr key={r.player_id} className={r.status !== 'completed' ? 'dim' : ''}>
                 <td className="rank">{r.status === 'completed' ? pos(r.position, r.tied) : r.status === 'pending' ? '…' : r.status.toUpperCase()}</td>
-                <td>{playerName(snap, r.player_id)}</td>
+                <td>{label(r.player_id)}</td>
                 <td>{r.session_number}</td>
                 <td className="num">{r.net ?? '—'}</td>
                 <td className="num led">{lb.lookup.ok ? pts(r.points) : '—'}</td>

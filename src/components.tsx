@@ -3,7 +3,7 @@ import { useApp } from './app';
 import type { EventPhase } from './lib/eventPhase';
 import { formatPoints, ordinal } from './lib/leaderboard';
 import { formatSessionDate, formatStartTime } from './lib/time';
-import type { EventSession, LeagueEvent, Snapshot } from './lib/types';
+import type { EventSession, LeagueEvent, Snapshot, Team } from './lib/types';
 
 export function Layout({ route, children }: { route: string[]; children: ReactNode }) {
   const { snap, repo } = useApp();
@@ -18,7 +18,7 @@ export function Layout({ route, children }: { route: string[]; children: ReactNo
       <header className="site-header">
         <a href="#/" className="wordmark" aria-label="JIMULATOR home">
           <img src="/logo-badge.png" alt="" width="40" height="40" className="wm-badge" />
-          <span><span className="wm-jim">JIM</span><span className="wm-ulator">ULATOR</span></span>
+          <span className="wm-text-wrap"><span className="wm-text"><span className="wm-jim">JIM</span><span className="wm-ulator">ULATOR</span></span></span>
         </a>
         <nav>
           {link('', 'Home')}
@@ -77,3 +77,11 @@ export function Section({ title, kicker, children, actions }: { title: string; k
     </section>
   );
 }
+
+/** "Jim & Tony" under a team's name, unless the name already says exactly that. */
+export function teamPlayers(snap: Snapshot, t: { name: string; player_a: string; player_b: string }): string | null {
+  const line = `${playerName(snap, t.player_a)} & ${playerName(snap, t.player_b)}`;
+  const norm = (x: string) => x.toLowerCase().replace(/\s+/g, ' ').replace(/ and /g, ' & ').trim();
+  return norm(t.name) === norm(line) ? null : line;
+}
+export type { Team };

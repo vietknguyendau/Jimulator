@@ -233,3 +233,11 @@ input[type='radio'] { width: auto; min-height: 0; accent-color: var(--turf); }
 .hero-season { margin-top: 0.25rem; }
 .hero .progress { justify-content: center; }
 @media (max-width: 520px) { .wm-badge { width: 32px; height: 32px; } }
+.team-row { display: grid; grid-template-columns: minmax(9rem, 1.2fr) 1fr 1fr auto; gap: 0.5rem; align-items: center; }
+@media (max-width: 640px) { .team-row { grid-template-columns: 1fr 1fr; } .team-row > input { grid-column: span 2; } .team-row .row-actions { grid-column: span 2; } }
+.format-tag { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--turf); border: 1px solid rgba(127, 224, 138, 0.4); border-radius: 999px; padding: 0.2rem 0.55rem; }
+.team-players { color: var(--muted); font-size: 0.85rem; }
+@media (max-width: 430px) {
+  .wm-text { display: none; } /* the badge carries the name on narrow phones */
+  .wm-badge { width: 36px; height: 36px; }
+}

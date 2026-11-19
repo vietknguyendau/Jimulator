@@ -1,9 +1,11 @@
 import { useApp } from '../app';
-import { eventSessions, PhaseBadge, playerName, pos, pts, Section, SessionLine } from '../components';
+import { eventSessions, PhaseBadge, playerName, pos, pts, Section, SessionLine, teamPlayers } from '../components';
 import { eventPhase } from '../lib/eventPhase';
-import { seasonStandings } from '../lib/standings';
+import { seasonStandings, teamStandings } from '../lib/standings';
+import { SCRAMBLE_HIGH, SCRAMBLE_LOW } from '../lib/handicap';
+import { teamName } from '../lib/schedule';
 import { leagueToday } from '../lib/time';
-import type { LeagueEvent } from '../lib/types';
+import type { EventSession, LeagueEvent, Snapshot } from '../lib/types';
 
 export function Dashboard() {
   const { snap } = useApp();
@@ -82,8 +84,51 @@ export function Dashboard() {
           Only official results count.
         </p>
       </Section>
+      <TeamStandings />
     </div>
   );
+}
+
+function TeamStandings() {
+  const { snap } = useApp();
+  const season = snap.settings.season_year;
+  const teams = snap.teams.filter((t) => t.season_year === season);
+  const events = snap.events.filter((e) => e.season_year === season);
+  if (!teams.length || !events.some((e) => e.format === 'scramble')) return null;
+  const rows = teamStandings(teams, events, snap.results);
+  return (
+    <Section title="Scramble teams" kicker="Points from scramble events · each teammate also earns them">
+      <div className="table-wrap">
+        <table className="board">
+          <thead>
+            <tr><th scope="col">Team</th><th scope="col">Players</th><th scope="col" className="num">Pts</th><th scope="col" className="num">Wins</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.team.id}>
+                <td>{teamName(r.team)}</td>
+                <td className="muted">{playerName(snap, r.team.player_a)} & {playerName(snap, r.team.player_b)}</td>
+                <td className="num led">{pts(r.points)}</td>
+                <td className="num">{r.firsts}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  );
+}
+
+/** "Jim, Austin" for individual; "Jim & Tony, Austin & Bryan" (team names) for a scramble session. */
+function groupLabel(snap: Snapshot, e: LeagueEvent, s: EventSession): string {
+  const group = snap.assignments.filter((a) => a.session_id === s.id);
+  if (!group.length) return 'Group not set';
+  if (e.format === 'scramble') {
+    const ids = new Set(group.map((a) => a.player_id));
+    const ts = snap.teams.filter((t) => t.season_year === e.season_year && (ids.has(t.player_a) || ids.has(t.player_b)));
+    if (ts.length) return ts.map(teamName).join(', ');
+  }
+  return group.map((a) => playerName(snap, a.player_id)).join(', ');
 }
 
 function NextUp({ e }: { e: LeagueEvent }) {
@@ -96,6 +141,7 @@ function NextUp({ e }: { e: LeagueEvent }) {
         <div>
           {ss.length ? ss.map((s) => <div key={s.id}><SessionLine s={s} /></div>) : <p className="muted">Dates to be announced.</p>}
           {e.course_name && <p className="muted">{e.course_name} · {e.tees} tees</p>}
+          {e.format === 'scramble' && <span className="format-tag">2-person scramble</span>}
         </div>
         <a className="btn" href={`#/events/${e.event_number}`}>Event details</a>
       </div>
@@ -122,22 +168,19 @@ export function Schedule() {
           <a key={e.id} href={`#/events/${e.event_number}`} className="card card-link">
             <div className="card-head">
               <div>
-                <p className="eyebrow">Event {e.event_number}</p>
+                <p className="eyebrow">Event {e.event_number}{e.format === 'scramble' ? ' · 2-person scramble' : ''}</p>
                 <h2>{e.name}</h2>
               </div>
               <PhaseBadge phase={eventPhase(e, snap.sessions)} />
             </div>
             <div className="sched-sessions">
               {ss.length === 0 && <p className="muted">Dates to be announced.</p>}
-              {ss.map((s) => {
-                const group = snap.assignments.filter((a) => a.session_id === s.id);
-                return (
-                  <div key={s.id} className="sched-session">
-                    <SessionLine s={s} />
-                    <p className="muted small">{group.length ? group.map((a) => playerName(snap, a.player_id)).join(', ') : 'Group not set'}</p>
-                  </div>
-                );
-              })}
+              {ss.map((s) => (
+                <div key={s.id} className="sched-session">
+                  <SessionLine s={s} />
+                  <p className="muted small">{groupLabel(snap, e, s)}</p>
+                </div>
+              ))}
             </div>
             {e.course_name && <p className="muted small">{e.course_name} · {e.tees} tees</p>}
           </a>
@@ -159,7 +202,7 @@ export function EventPage({ n }: { n: number }) {
   return (
     <div className="stack">
       <header className="page-head">
-        <p className="eyebrow">Event {e.event_number} of 5</p>
+        <p className="eyebrow">Event {e.event_number} of 5{e.format === 'scramble' ? ' · 2-person team scramble' : ''}</p>
         <h1>{e.name}</h1>
         <PhaseBadge phase={phase} />
       </header>
@@ -173,7 +216,8 @@ export function EventPage({ n }: { n: number }) {
         <div className="pending-banner" role="status"><strong>All rounds are in.</strong> Official results are coming soon.</div>
       )}
 
-      {phase.kind === 'official' && (
+      {phase.kind === 'official' && e.format === 'scramble' && <ScrambleResults e={e} />}
+      {phase.kind === 'official' && e.format !== 'scramble' && (
         <Section title="Official results" kicker="One combined leaderboard · lowest net wins">
           <div className="table-wrap">
             <table className="board">
@@ -206,7 +250,8 @@ export function EventPage({ n }: { n: number }) {
       <Section title="Schedule & groups" kicker="All times Central">
         {ss.length === 0 && <p className="muted">Dates to be announced.</p>}
         <div className="groups">
-          {ss.map((s) => {
+          {e.format === 'scramble' && ss.map((s) => <TeamGroup key={s.id} e={e} s={s} />)}
+          {e.format !== 'scramble' && ss.map((s) => {
             const group = snap.assignments.filter((a) => a.session_id === s.id);
             return (
               <div key={s.id} className="group">
@@ -244,6 +289,74 @@ export function EventPage({ n }: { n: number }) {
         {e.status !== 'draft' && <p className="fine">Setup locked and handicaps confirmed.</p>}
       </Section>
     </div>
+  );
+}
+
+function TeamGroup({ e, s }: { e: LeagueEvent; s: EventSession }) {
+  const { snap } = useApp();
+  const ids = new Set(snap.assignments.filter((a) => a.session_id === s.id).map((a) => a.player_id));
+  const teams = snap.teams.filter((t) => t.season_year === e.season_year && (ids.has(t.player_a) || ids.has(t.player_b)));
+  return (
+    <div className="group">
+      <SessionLine s={s} />
+      <ul>
+        {teams.map((t) => {
+          const et = snap.eventTeams.find((x) => x.event_id === e.id && x.team_id === t.id);
+          return (
+            <li key={t.id}>
+              <span>
+                <strong>{teamName(t)}</strong>
+                {teamPlayers(snap, t) && <><br /><span className="team-players">{teamPlayers(snap, t)}</span></>}
+              </span>
+              {et && <span className="muted small">{et.strokes} team strokes</span>}
+            </li>
+          );
+        })}
+        {teams.length === 0 && <li className="muted">Teams not set</li>}
+      </ul>
+    </div>
+  );
+}
+
+function ScrambleResults({ e }: { e: LeagueEvent }) {
+  const { snap } = useApp();
+  const byTeam = new Map<string, (typeof snap.results)[number]>();
+  for (const r of snap.results) if (r.event_id === e.id && r.team_id) byTeam.set(r.team_id, r);
+  const rows = [...byTeam.entries()].sort((a, b) => (a[1].position ?? 99) - (b[1].position ?? 99));
+  return (
+    <Section title="Official results" kicker="One combined team leaderboard · lowest net wins">
+      <div className="table-wrap">
+        <table className="board">
+          <thead>
+            <tr>
+              <th scope="col">Pos</th><th scope="col">Team</th><th scope="col" className="hide-sm">Day</th>
+              <th scope="col" className="num">Gross</th><th scope="col" className="num hide-sm">Hcp</th>
+              <th scope="col" className="num">Net</th><th scope="col" className="num">Pts each</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([tid, r]) => {
+              const t = snap.teams.find((x) => x.id === tid);
+              return (
+                <tr key={tid} className={r.status !== 'completed' ? 'dim' : ''}>
+                  <td className="rank">{r.status === 'completed' ? pos(r.position, r.tied) : r.status === 'dnf' ? 'DNF' : 'DNA'}</td>
+                  <td>
+                    {t ? teamName(t) : 'Team'}
+                    {t && teamPlayers(snap, t) && <span className="team-players"><br />{teamPlayers(snap, t)}</span>}
+                  </td>
+                  <td className="hide-sm">{r.session_number}</td>
+                  <td className="num">{r.gross ?? '—'}</td>
+                  <td className="num hide-sm">{r.strokes ?? '—'}</td>
+                  <td className="num led">{r.net ?? '—'}</td>
+                  <td className="num led">{pts(r.points)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="fine">Both teammates earn the team's points toward the individual championship. Tied teams split the points for the places they share.</p>
+    </Section>
   );
 }
 
@@ -302,6 +415,17 @@ export function Rules() {
           <li>Players must complete all 9 holes to receive points.</li>
           <li>After Day 1 the schedule shows "Day 2 pending." Scores stay private until official results are published.</li>
           <li>An event becomes official once every scheduled session is complete and every player is marked completed, did not finish, or did not attend. Points are awarded once for the whole event.</li>
+        </ul>
+      </Section>
+      <Section title="Team scramble events">
+        <ul>
+          <li>The commissioner can make any event a <strong>2-person team scramble</strong> instead of individual stroke play.</li>
+          <li>Teams are set at the start of the season and stay together for every scramble event.</li>
+          <li>Both teammates play in the same session, two teams per session. With 8 players, two teams play Day 1 and two play Day 2.</li>
+          <li>Each team turns in one 9-hole scramble score.</li>
+          <li>Team handicap: {SCRAMBLE_LOW * 100}% of the lower 9-hole Course Handicap plus {SCRAMBLE_HIGH * 100}% of the higher, rounded to the nearest stroke, confirmed before the first session.</li>
+          <li>All teams compete on one combined leaderboard by net score. The points table is chosen by the number of teams (4 teams use the 12, 9, 6, 3 table), and both teammates earn their team's points toward the individual championship.</li>
+          <li>Tied teams split the points for the places they share. A scramble with a number of teams other than 4 or 8 is held until the commissioner resolves how to score it.</li>
         </ul>
       </Section>
       <Section title="Five-event championship">
